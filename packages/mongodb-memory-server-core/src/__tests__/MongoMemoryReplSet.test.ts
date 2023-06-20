@@ -564,6 +564,7 @@ describe('MongoMemoryReplSet', () => {
       } as utils.Cleanup);
     });
 
+
     it('should call cleanup with mapped boolean', async () => {
       const replSet = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
 
@@ -612,6 +613,39 @@ describe('MongoMemoryReplSet', () => {
         doCleanup: true,
         force: true,
       } as utils.Cleanup);
+    });
+
+    it('should handle external shutdown event of MongoDB process', async () => {
+      const replSet = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
+
+      // @ts-expect-error because "_instanceInfo" is protected
+      const instance = replSet.servers[0]._instanceInfo.instance;
+      // @ts-expect-error because "mongoProcess" can be undefined
+      const mongoProcess: ChildProcess  = instance.mongodProcess
+      await new Promise<void>((resolve, reject) => {
+	mongoProcess.on('close', () => {
+	  resolve()
+	})
+	process.kill(mongoProcess.pid, 'SIGINT');
+      })
+
+      const TIMEOUT = 'timeout';
+      const STOP = 'stop';
+      // Now replSet should be able to shutdown quite fast
+      const timeoutWait = new Promise<string>((resolve, reject) => {
+	setTimeout(resolve, 2000, TIMEOUT);
+      })
+      const stopWait = new Promise<string>(async (resolve, reject) => {
+	await replSet.stop({ doCleanup: true, force: true });
+	resolve(STOP);
+      })
+      // Process is gone, we shouldn't wait for it
+      const winner = await Promise.race([
+	timeoutWait,
+	stopWait,
+      ])
+      expect(winner).toBe(STOP);
+      await timeoutWait;
     });
   });
 
