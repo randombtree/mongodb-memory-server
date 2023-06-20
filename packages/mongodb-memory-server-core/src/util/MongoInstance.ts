@@ -547,6 +547,7 @@ export class MongoInstance extends EventEmitter implements ManagerBase {
     }
 
     this.debug(`closeHandler: code: "${code}", signal: "${signal}"`);
+    this.mongodProcess = undefined
     this.emit(MongoInstanceEvents.instanceClosed, code, signal);
   }
 

@@ -12,10 +12,10 @@ import {
   createTmpDir,
   removeDir,
 } from './util/utils';
-import { MongoInstance, MongodOpts, MongoMemoryInstanceOpts } from './util/MongoInstance';
+import { MongoInstance, MongodOpts, MongoMemoryInstanceOpts, MongoInstanceEvents } from './util/MongoInstance';
 import { MongoBinaryOpts } from './util/MongoBinary';
 import debug from 'debug';
-import { EventEmitter } from 'events';
+import { EventEmitter, once } from 'events';
 import { promises as fspromises } from 'fs';
 import { MongoClient } from 'mongodb';
 import { EnsureInstanceError, StateError } from './util/errors';
@@ -446,7 +446,15 @@ export class MongoMemoryServer extends EventEmitter implements ManagerAdvanced {
     const { mongodOptions, createAuth, data } = await this.getStartOptions(forceSamePort);
     this.debug(`_startUpInstance: Creating new MongoDB instance with options:`, mongodOptions);
 
-    const instance = await MongoInstance.create(mongodOptions);
+    const instance = new MongoInstance(mongodOptions);
+    instance.once(MongoInstanceEvents.instanceClosed, (ret) => {
+      if (this.state != MongoMemoryServerStates.stopped) {
+	this.debug('MongoDB shut down', ret)
+	this.stateChange(MongoMemoryServerStates.stopped)
+      }
+    })
+
+    await instance.start()
     this.debug(`_startUpInstance: Instance Started, createAuth: "${createAuth}"`);
 
     this._instanceInfo = {
@@ -522,15 +530,19 @@ export class MongoMemoryServer extends EventEmitter implements ManagerAdvanced {
     }
 
     if (this._state === MongoMemoryServerStates.stopped) {
-      this.debug('stop: state is "stopped", trying to stop / kill anyway');
+      this.debug('stop: state is already "stopped"; only cleanup');
+    } else {
+      this.debug(
+	`stop: Stopping MongoDB server on port ${this._instanceInfo.port} with pid ${this._instanceInfo.instance?.mongodProcess?.pid}` // "undefined" would say more than ""
+      );
+      // If the instance dies before stop, we can continue without delays
+      await Promise.race([
+	this._instanceInfo.instance.stop(),
+	once(this._instanceInfo.instance, MongoInstanceEvents.instanceClosed)
+      ])
+
+      this.stateChange(MongoMemoryServerStates.stopped);
     }
-
-    this.debug(
-      `stop: Stopping MongoDB server on port ${this._instanceInfo.port} with pid ${this._instanceInfo.instance?.mongodProcess?.pid}` // "undefined" would say more than ""
-    );
-    await this._instanceInfo.instance.stop();
-
-    this.stateChange(MongoMemoryServerStates.stopped);
 
     if (cleanup.doCleanup) {
       await this.cleanup(cleanup);
